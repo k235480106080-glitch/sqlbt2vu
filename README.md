@@ -733,3 +733,82 @@ SET STATISTICS IO ON;   -- Đo số lần đọc/ghi dữ liệu trên ổ đĩa
 | **Độ phức tạp mã** | **Dài dòng**, cấu trúc phức tạp, khó bảo trì. | **Ngắn gọn**, tường minh, dễ đọc. |
 | **Hiệu năng** | **Chậm**, thường gây nghẽn hệ thống khi dữ liệu lớn. | **Nhanh**, là cách tiếp cận chuẩn trong SQL Server. |
 
+
+### 5.3. Bài toán độc quyền chỉ có CURSOR mới giải quyết 
+Thực tế, hầu hết các bài toán truy vấn dữ liệu đều có thể dùng SQL thuần (Set-based) để giải quyết. Tuy nhiên, có một kịch bản mà SQL thuần cực kỳ khó xử lý, đó là: Thực hiện các tác vụ quản trị hoặc gọi Stored Procedure khác cho từng đối tượng dựa trên danh sách động.
+
+#### 1. Bài toán: Tự động sao lưu (Backup) từng Database riêng lẻ
+Giả sử trên Server của bạn có 100 cái Database. Bạn muốn viết một script để:
+
+Duyệt qua danh sách tên các Database hiện có.
+
+Với mỗi Database, bạn phải thực hiện lệnh `BACKUP DATABASE [Tên] TO DISK = '...'.`
+
+Tại sao SQL thuần (SELECT) không làm được?
+Lệnh `BACKUP` là một lệnh đơn (Command), nó không chấp nhận biến số trực tiếp cho tên Database theo kiểu tập hợp. Bạn không thể viết: `BACKUP DATABASE (SELECT name FROM sys.databases)`.
+
+Lúc này, Cursor là "cứu cánh" duy nhất vì nó cho phép bạn bốc từng cái tên ra, gán vào một biến, và thực thi lệnh backup cho cái tên đó.
+
+#### 2. Bài toán áp dụng vào đề tài "Quản lý Thủy cung" 
+Yêu cầu: Em muốn tạo ra mỗi sinh vật một cái Bảng nhật ký riêng (Table) dựa trên tên của chúng để theo dõi chuyên sâu (Ví dụ: tạo bảng Log_CaMapTrang, Log_CaHeNemo...).
+
+Logic:
+
+Duyệt danh sách `tenLoai` trong bảng `sinhVat`.
+
+Với mỗi tên, thực hiện lệnh `CREATE TABLE`.
+
+### Script minh chứng:
+
+```sql
+DECLARE @tenSV NVARCHAR(100);
+DECLARE @sqlQuery NVARCHAR(MAX);
+
+-- Khai báo Cursor duyệt danh sách tên sinh vật
+DECLARE cur_DynamicTable CURSOR FOR 
+SELECT REPLACE(tenLoai, ' ', '_') FROM [sinhVat]; -- Thay khoảng trắng bằng gạch dưới để đặt tên bảng
+
+OPEN cur_DynamicTable;
+FETCH NEXT FROM cur_DynamicTable INTO @tenSV;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    -- Tạo câu lệnh SQL động (Dynamic SQL)
+    SET @sqlQuery = 'CREATE TABLE Log_' + @tenSV + ' (ID INT PRIMARY KEY, GhiChu NVARCHAR(MAX))';
+    
+    -- Thực thi lệnh tạo bảng
+    EXEC sp_executesql @sqlQuery;
+    
+    PRINT N'Đã tạo bảng riêng cho: ' + @tenSV;
+
+    FETCH NEXT FROM cur_DynamicTable INTO @tenSV;
+END;
+
+CLOSE cur_DynamicTable;
+DEALLOCATE cur_DynamicTable;
+```
+
+<img width="2879" height="1796" alt="image" src="https://github.com/user-attachments/assets/da3108c6-66e7-4b09-a748-c6cdb5d3f114" />
+
+### 3. So sánh và Nhận xét cuối cùng
+| Đặc điểm | SQL thuần (Set-based) | Cursor (Procedural) |
+| :--- | :--- | :--- |
+| **Khả năng** | Chỉ xử lý dữ liệu (**DML**: Insert, Update, Select). | Xử lý được cả cấu trúc (**DDL**) và các **lệnh hệ thống**. |
+| **Logic** | Làm việc với cái gì (**What**) - Tập trung vào kết quả. | Làm việc thế nào (**How**) - Tập trung vào các bước thực hiện. |
+| **Khi nào dùng?** | **99% các trường hợp** xử lý và truy vấn dữ liệu thông thường. | Khi cần thực thi lệnh động (**Dynamic SQL**) hoặc thực hiện tác vụ **quản trị hệ thống**. |
+| **Tốc độ** | **Rất nhanh** nhờ cơ chế tối ưu hóa truy vấn của SQL Server. | **Chậm** vì xử lý tuần tự từng bản ghi một. |
+
+## KẾT LUẬN CUỐI CÙNG
+Sau khi hoàn thành các nội dung thực hành từ cơ bản đến nâng cao trên SQL Server, em đã rút ra được những "bài học xương máu" sau:
+
+- Về Stored Procedure & Function: Em nhận ra SP mạnh mẽ hơn nhiều so với Function nhờ khả năng thực hiện lệnh INSERT/UPDATE và kiểm soát logic bằng IF-ELSE. Việc sử dụng tham số OUTPUT hay trả về một Result Set giúp hệ thống linh hoạt hơn, bảo mật hơn thay vì cứ truy vấn trực tiếp vào bảng thô.
+
+- Về Trigger (Phần tâm đắc nhất): Trigger thực sự là "con dao hai lưỡi". Qua thí nghiệm thực tế về vòng lặp vô tận (Recursion) dẫn đến lỗi Msg 217, em hiểu rằng mình không được phép thiết kế các Trigger cập nhật chéo nhau. Bài học rút ra là: Đừng bao giờ để các "cái bẫy" tự bẫy chính mình.
+
+- Về Cursor và Tư duy Set-based: Ban đầu em thấy Cursor rất dễ hiểu vì nó giống tư duy lập trình for/while thông thường. Tuy nhiên, khi so sánh hiệu năng (qua STATISTICS TIME và Execution Plan), em thực sự bị thuyết phục bởi sức mạnh của lệnh SELECT thuần túy.
+
+- Set-based (SELECT/UPDATE tập hợp): Là "xe đua", cực nhanh, tối ưu cho dữ liệu.
+
+- Cursor: Là "xe lu", chậm chạp nhưng lại là cứu cánh duy nhất khi cần xử lý các tác vụ quản trị hệ thống phức tạp hoặc chạy SQL động (như bài toán tạo bảng hàng loạt).
+
+--> Tóm lại: Một Database tốt không chỉ là chứa được dữ liệu, mà phải là một hệ thống "biết tự bảo vệ" (nhờ Trigger), "biết tự vận hành" (nhờ SP) và được tối ưu hóa để chạy nhanh nhất có thể. Em sẽ áp dụng tư duy "ưu tiên Set-based, hạn chế Cursor" vào các dự án phần mềm sau này để đảm bảo hệ thống không bị "treo" khi dữ liệu lớn lên.
