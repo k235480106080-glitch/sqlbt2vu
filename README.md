@@ -372,3 +372,364 @@ SELECT * FROM [lichChoAn];
 ```
 <img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/66a639fd-a965-432a-9fb8-02901ec759be" />
 
+### 3.3. Viết Stored Procedure sử dụng tham số OUTPUT
+Yêu cầu của SP: Tính tổng chi phí vận hành (bao gồm bảo hiểm và chi phí thức ăn) của một bể nuôi bất kỳ. Kết quả tổng tiền này sẽ được trả về qua một biến OUTPUT.
+
+Logic nghiệp vụ: Ban quản lý cần biết một bể nuôi cụ thể đang tiêu tốn bao nhiêu ngân sách để cân đối tài chính.
+
+### Script khởi tạo Stored Procedure:
+```sql
+CREATE PROCEDURE sp_TinhNganSachBeNuoi
+    @idBe INT,
+    @tongNganSach MONEY OUTPUT -- Tham số trả kết quả ra ngoài
+AS
+BEGIN
+    -- Kiểm tra bể có tồn tại không
+    IF NOT EXISTS (SELECT 1 FROM [beNuoi] WHERE [maBe] = @idBe)
+    BEGIN
+        SET @tongNganSach = 0;
+        PRINT N'Lỗi: Không tìm thấy bể nuôi này!';
+        RETURN;
+    END
+
+    -- Tính toán: Tổng Bảo hiểm sinh vật trong bể + Tổng chi phí các bữa ăn
+    DECLARE @tienBaoHiem MONEY = 0;
+    DECLARE @tienThucAn MONEY = 0;
+
+    -- 1. Tính tổng bảo hiểm của các sinh vật thuộc bể này
+    SELECT @tienBaoHiem = SUM([giaTriBaoHiem]) 
+    FROM [sinhVat] 
+    WHERE [maBe] = @idBe;
+
+    -- 2. Tính tổng chi phí thức ăn của các sinh vật thuộc bể này
+    SELECT @tienThucAn = SUM(L.[chiPhiBuaAn])
+    FROM [lichChoAn] L
+    JOIN [sinhVat] S ON L.[maSinhVat] = S.[maSinhVat]
+    WHERE S.[maBe] = @idBe;
+
+    -- Gán tổng giá trị vào biến OUTPUT (Xử lý trường hợp NULL bằng 0)
+    SET @tongNganSach = ISNULL(@tienBaoHiem, 0) + ISNULL(@tienThucAn, 0);
+
+    PRINT N'Đã tính toán xong ngân sách cho bể số: ' + CAST(@idBe AS NVARCHAR(10));
+END;
+GO
+```
+
+### Câu lệnh SQL khai thác (Sử dụng biến để nhận giá trị):
+Để lấy được giá trị từ tham số `OUTPUT`, bạn cần thực hiện theo các bước khai báo biến hứng như sau:
+```sql
+-- 1. Khai báo biến để nhận kết quả trả về từ SP
+DECLARE @nganSachHienTai MONEY;
+
+-- 2. Thực thi SP với tham số OUTPUT
+EXEC sp_TinhNganSachBeNuoi 
+    @idBe = 1, 
+    @tongNganSach = @nganSachHienTai OUTPUT;
+
+-- 3. Hiển thị kết quả cuối cùng
+SELECT 
+    @nganSachHienTai AS [TongNganSach_Be_1],
+    FORMAT(@nganSachHienTai, 'C', 'vi-VN') AS [DinhDangTienTe];
+```
+
+<img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/d5f70ebc-eb30-43bf-9d84-030018d8a135" />
+
+### 3.4. Viết Stored Procedure trả về tập kết quả (Join nhiều bảng)
+Logic nghiệp vụ: Ban quản lý thủy cung cần một "Báo cáo Nhật ký Nuôi dưỡng Chi tiết". Báo cáo này phải cho biết: Tên sinh vật là gì, nó đang ở bể nào, và lịch sử ăn uống gần nhất của nó ra sao (thời gian, lượng thức ăn).
+
+Yêu cầu của SP: Thực hiện JOIN 3 bảng `beNuoi`, `sinhVat` và `lichChoAn` để đưa ra một cái nhìn tổng thể.
+
+### Script khởi tạo Stored Procedure:
+```sql
+CREATE PROCEDURE sp_BaoCaoChiTietNuoiDuong
+AS
+BEGIN
+    -- Thiết lập định dạng ngày tháng hiển thị cho đẹp (tùy chọn)
+    SET NOCOUNT ON; 
+
+    -- Thực hiện truy vấn JOIN 3 bảng để lấy thông tin tổng hợp
+    SELECT 
+        B.[tenBe] AS [TenBeNuoi],
+        S.[tenLoai] AS [TenSinhVat],
+        S.[tinhTrangSucKhoe] AS [SucKhoe],
+        L.[thoiGianChoAn] AS [NgayGioAn],
+        L.[luongThucAnKg] AS [LuongAn_Kg],
+        L.[chiPhiBuaAn] AS [ChiPhi]
+    FROM [beNuoi] B
+    INNER JOIN [sinhVat] S ON B.[maBe] = S.[maBe]
+    INNER JOIN [lichChoAn] L ON S.[maSinhVat] = L.[maSinhVat]
+    ORDER BY L.[thoiGianChoAn] DESC; -- Sắp xếp lịch ăn mới nhất lên đầu
+END;
+GO
+```
+
+### Câu lệnh SQL khai thác Stored Procedure:
+Đối với loại SP trả về tập kết quả, bạn chỉ cần gọi lệnh `EXEC` là bảng dữ liệu sẽ hiện ra ngay lập tức.
+```sql
+-- Thực thi để xem báo cáo tổng hợp từ 3 bảng
+EXEC sp_BaoCaoChiTietNuoiDuong;
+```
+
+<img width="2879" height="1793" alt="image" src="https://github.com/user-attachments/assets/dc3084b9-14a6-4ee0-b7f7-b4234fffe015" />
+
+## Phần 4: Xây dựng Trigger và Xử lý logic nghiệp vụ
+Trong quản lý Thủy cung, logic thực tế nhất chính là: Tự động cập nhật tình trạng sức khỏe của sinh vật khi chúng được cho ăn.
+### 4.1. Trigger tự động cập nhật dữ liệu liên bảng
+Logic nghiệp vụ: Khi một nhân viên thêm một bản ghi vào bảng `lichChoAn` (Bảng A), hệ thống sẽ tự động cập nhật cột `tinhTrangSucKhoe` trong bảng `sinhVat` (Bảng B) thành 'Khỏe mạnh'.
+
+Lý do thuyết phục: Việc được cho ăn đầy đủ là dấu hiệu tốt nhất cho thấy sinh vật đang được chăm sóc. Tự động hóa việc này giúp giảm bớt thao tác thủ công cho nhân viên và đảm bảo dữ liệu luôn phản ánh trạng thái mới nhất.
+### Script khởi tạo Trigger:
+```sql
+CREATE TRIGGER trg_CapNhatSucKhoeSauKhiAn
+ON [lichChoAn]
+AFTER INSERT -- Kích hoạt sau khi thêm dữ liệu vào bảng lịch cho ăn
+AS
+BEGIN
+    -- Cập nhật tình trạng sức khỏe trong bảng sinhVat
+    -- Dựa trên mã sinh vật vừa được chèn vào trong bảng ảo 'inserted'
+    UPDATE [sinhVat]
+    SET [tinhTrangSucKhoe] = N'Khỏe mạnh'
+    FROM [sinhVat] S
+    INNER JOIN inserted I ON S.[maSinhVat] = I.[maSinhVat];
+
+    PRINT N'Hệ thống: Đã tự động cập nhật trạng thái Khỏe mạnh cho sinh vật vừa ăn.';
+END;
+GO
+```
+
+### Câu lệnh SQL khai thác (Kiểm chứng) Trigger:
+Để thấy được sự "vi diệu" của Trigger, chúng ta hãy làm theo 2 bước:
+- Bước 1: Kiểm tra trạng thái hiện tại (Giả sử con cá mã số 2 đang 'Đang theo dõi')
+```sql
+SELECT [maSinhVat], [tenLoai], [tinhTrangSucKhoe] 
+FROM [sinhVat] WHERE [maSinhVat] = 2;
+```
+
+<img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/594afbd6-7d9e-4ec2-9120-8c011e10d122" />
+
+
+- Bước 2: Thêm một lịch cho ăn cho con cá số 2 này
+```sql
+INSERT INTO [lichChoAn] ([maSinhVat], [thoiGianChoAn], [luongThucAnKg], [chiPhiBuaAn])
+VALUES (2, GETDATE(), 0.5, 25);
+```
+
+<img width="2874" height="1799" alt="image" src="https://github.com/user-attachments/assets/1457072f-043a-4dfb-a5b8-301b84218df1" />
+
+
+
+- Bước 3: Kiểm tra lại bảng sinhVat
+```sql
+-- Bạn sẽ thấy tình trạng của nó tự động nhảy sang 'Khỏe mạnh' mà không cần lệnh UPDATE thủ công
+SELECT [maSinhVat], [tenLoai], [tinhTrangSucKhoe] 
+FROM [sinhVat] WHERE [maSinhVat] = 2;
+```
+<img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/a132390a-d543-4cf5-bf6a-f372383bfe70" />
+
+- Bước 4: Chạy hết toàn bộ code 
+<img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/1e035ff9-411e-4be0-ae6f-d4d4638ed0d1" />
+
+### 4.2. Trigger vòng lặp (Recursive Triggers).
+
+#### 4.2.1. Thiết lập thí nghiệm (Scenario)
+ - Bảng A (`sinhVat`): Khi cập nhật trạng thái cá, sẽ cập nhật ghi chú bên bảng B.
+
+ - Bảng B (`lichChoAn`): Khi cập nhật ghi chú lịch ăn, sẽ cập nhật ngược lại trạng thái bên bảng A.
+
+- Bước 1: Viết Trigger cho bảng A (`sinhVat`) cập nhật bảng B
+```sql
+CREATE TRIGGER trg_A_to_B
+ON [sinhVat]
+AFTER UPDATE
+AS
+BEGIN
+    PRINT N'--> Trigger A_to_B đang chạy...';
+    UPDATE [lichChoAn]
+    SET [chiPhiBuaAn] = [chiPhiBuaAn] + 1 -- Tăng nhẹ chi phí làm dấu
+    FROM [lichChoAn] L
+    INNER JOIN inserted I ON L.[maSinhVat] = I.[maSinhVat];
+END;
+GO
+```
+
+<img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/efe9f056-bc74-4f68-a301-0d9336966e1e" />
+
+
+- Bước 2: Viết Trigger cho bảng B (`lichChoAn`) cập nhật ngược lại bảng A
+```sql
+CREATE TRIGGER trg_B_to_A
+ON [lichChoAn]
+AFTER UPDATE
+AS
+BEGIN
+    PRINT N'--> Trigger B_to_A đang chạy...';
+    UPDATE [sinhVat]
+    SET [tinhTrangSucKhoe] = N'Đã kiểm tra'
+    FROM [sinhVat] S
+    INNER JOIN inserted I ON S.[maSinhVat] = I.[maSinhVat];
+END;
+GO
+```
+
+<img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/da017c30-bc8f-4599-9825-02bc3f9f6609" />
+
+
+#### 4.2.1. Quan sát hiện tượng
+
+Bây giờ, em  kích hoạt vòng lặp bằng một lệnh `UPDATE` đơn giản:
+```sql
+UPDATE [sinhVat] SET [tinhTrangSucKhoe] = N'Khỏe' WHERE [maSinhVat] = 1;
+```
+
+<img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/56d389c5-29d3-421a-b159-23209214fd12" />
+
+#### Giải thích thông báo hệ thống
+- Lỗi Msg 217: "Maximum nesting level exceeded (limit 32)".
+
+--> Giải thích: SQL Server có một cơ chế bảo vệ hệ thống. Nó chỉ cho phép các lệnh gọi nhau tối đa 32 tầng.
+
+Lệnh Update A gọi Trigger A.
+
+- Trigger A gọi lệnh Update B.
+
+- Update B gọi Trigger B.
+
+- Trigger B lại gọi lệnh Update A...
+
+--> Cứ thế tạo thành một cái vòng lặp vô tận (Infinite Loop). Nếu SQL Server không tự ngắt ở tầng thứ 32, máy chủ sẽ bị treo (treo CPU và tràn bộ nhớ) vì hàng triệu lệnh thực hiện cùng lúc.
+
+### 4.3 Nhận xét cuối cùng 
+
+- Thiết kế sai lầm: Việc để hai Trigger cập nhật qua lại lẫn nhau tạo ra hiện tượng Đệ quy gián tiếp (Indirect Recursion). Đây là một lỗi thiết kế nghiêm trọng trong Database cần tuyệt đối tránh.
+
+--> Hậu quả: Gây tốn tài nguyên hệ thống và khiến dữ liệu không bao giờ được cập nhật thành công (vì bị ROLLBACK khi chạm ngưỡng 32 lần).
+
+- Giải pháp: >    * Chỉ nên để Trigger chạy một chiều.
+
+Nếu cần cập nhật nhiều bảng, hãy gom tất cả vào 01 Stored Procedure duy nhất để kiểm soát luồng dữ liệu thay vì dùng nhiều Trigger rời rạc.
+
+Sử dụng tùy chọn `IF TRIGGER_NESTLEVEL() > 1 RETURN` để ngắt vòng lặp nếu bắt buộc phải dùng.
+
+### Tổng kết phần 4:
+Qua thí nghiệm này, chúng ta rút ra được những điểm mấu chốt sau:
+
+Tính nguy hiểm: Trigger rất mạnh nhưng nếu thiết kế không khéo (để chúng cập nhật chéo nhau) sẽ tạo ra "hố đen" nuốt chửng tài nguyên hệ thống.
+
+Cơ chế tự vệ: SQL Server rất thông minh, nó có ngưỡng giới hạn (32 tầng) để ngăn chặn các sai lầm của lập trình viên làm sập hệ thống.
+
+Lời khuyên chuyên gia: Luôn phải kiểm tra luồng dữ liệu (Data Flow) khi viết Trigger liên bảng. Nếu bảng A đã tác động bảng B, thì bảng B không nên tác động ngược lại bảng A bằng cùng một loại sự kiện.
+
+## Phần 5: Cursor và Duyệt dữ liệu
+Để hoàn thiện kỹ năng xử lý dữ liệu nâng cao, chúng ta sẽ làm quen với Cursor.
+
+Mặc dù trong SQL Server, em sẽ thường ưu tiên xử lý dữ liệu theo tập hợp (Set-based), nhưng Cursor là công cụ không thể thay thế khi cần duyệt qua từng dòng một để thực hiện các tác vụ riêng biệt mà một câu lệnh `UPDATE` hay `INSERT` thông thường không làm được (ví dụ: gửi email, in báo cáo cá nhân hóa, hoặc thực hiện logic nghiệp vụ phức tạp cho mỗi bản ghi).
+
+### 5.1. Sử dụng Cursor để xử lý dữ liệu từng dòng
+- Logic nghiệp vụ: Ban quản lý muốn xuất một "Thông báo bảo trì định kỳ" cho từng bể nuôi.
+
+- Với mỗi bể, chúng ta sẽ tính toán số lượng sinh vật hiện có.
+
+- Dựa vào loại môi trường (Nước mặn/Nước ngọt) để đưa ra lời khuyên bảo trì khác nhau.
+
+- In ra một thông điệp chi tiết cho từng bể.
+
+### Script sử dụng Cursor:
+```sql
+-- 1. Khai báo các biến để chứa dữ liệu từ từng dòng
+DECLARE @tenBe NVARCHAR(100);
+DECLARE @loaiMT NVARCHAR(50);
+DECLARE @maBe INT;
+DECLARE @soLuongSV INT;
+
+-- 2. Khai báo Cursor để duyệt qua danh sách các bể nuôi
+DECLARE cur_BaoTriBe CURSOR FOR 
+SELECT maBe, tenBe, loaiMoiTruong FROM [beNuoi];
+
+-- 3. Mở Cursor
+OPEN cur_BaoTriBe;
+
+-- 4. Lấy dòng dữ liệu đầu tiên
+FETCH NEXT FROM cur_BaoTriBe INTO @maBe, @tenBe, @loaiMT;
+
+-- 5. Vòng lặp duyệt qua từng bản ghi cho đến khi hết dữ liệu (@@FETCH_STATUS = 0)
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    -- Xử lý logic riêng cho từng bản ghi: Đếm số sinh vật trong bể hiện tại
+    SELECT @soLuongSV = COUNT(*) FROM [sinhVat] WHERE [maBe] = @maBe;
+
+    -- In ra thông báo tùy biến theo logic nghiệp vụ
+    PRINT '----------------------------------------------------';
+    PRINT N'THÔNG BÁO BẢO TRÌ BỂ: ' + UPPER(@tenBe);
+    PRINT N'Môi trường: ' + @loaiMT;
+    PRINT N'Số lượng sinh vật đang quản lý: ' + CAST(@soLuongSV AS NVARCHAR(10));
+
+    IF @loaiMT = N'Nước mặn'
+        PRINT N'Lưu ý: Kiểm tra nồng độ muối và hệ thống lọc san hồ.';
+    ELSE
+        PRINT N'Lưu ý: Kiểm tra độ pH và hệ thống sục khí oxy.';
+
+    -- 6. Lấy dòng tiếp theo
+    FETCH NEXT FROM cur_BaoTriBe INTO @maBe, @tenBe, @loaiMT;
+END;
+
+-- 7. Đóng và giải phóng Cursor (Cực kỳ quan trọng để tránh tốn tài nguyên)
+CLOSE cur_BaoTriBe;
+DEALLOCATE cur_BaoTriBe;
+```
+
+<img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/9717dcc6-c216-4d33-a8e6-71774a2d7f4f" />
+
+
+
+
+
+
+Giải thích 
+- DECLARE CURSOR: Định nghĩa tập dữ liệu mà bạn muốn duyệt qua.
+
+- OPEN / FETCH NEXT: Mở danh sách và bắt đầu "bốc" từng dòng dữ liệu gán vào các biến tương ứng.
+
+- WHILE @@FETCH_STATUS = 0: Vòng lặp này sẽ chạy cho đến khi không còn dòng nào để đọc nữa.
+
+- CLOSE / DEALLOCATE: Cursor chiếm dụng bộ nhớ trên Server, vì vậy phải đóng và giải phóng ngay sau khi dùng xong.
+
+### Nhận xét về Cursor:
+- Ưu điểm: Cho phép xử lý logic cực kỳ chi tiết cho từng dòng (Row-by-row processing), phù hợp cho việc tạo báo cáo phức tạp hoặc gọi các Stored Procedure khác cho từng đối tượng.
+
+- Nhược điểm: Hiệu năng chậm hơn so với xử lý tập hợp (Set-based) nếu danh sách có hàng triệu bản ghi. Vì vậy, chỉ nên dùng Cursor khi thực sự cần thiết.
+
+ ### 5.2 Giải pháp không dùng Cursor (Set-based)
+Chúng ta sẽ dùng một lệnh `SELECT` duy nhất để tính toán và ghép chuỗi dữ liệu.
+```sql
+-- Sử dụng SQL Set-based để tạo nội dung thông báo cho tất cả các bể cùng lúc
+SELECT 
+    '----------------------------------------------------' AS [Divider],
+    UPPER([tenBe]) AS [TenBeNuoi],
+    [loaiMoiTruong],
+    (SELECT COUNT(*) FROM [sinhVat] S WHERE S.[maBe] = B.[maBe]) AS [SoLuongSV],
+    CASE 
+        WHEN [loaiMoiTruong] = N'Nước mặn' THEN N'Lưu ý: Kiểm tra nồng độ muối và hệ thống lọc san hồ.'
+        ELSE N'Lưu ý: Kiểm tra độ pH và hệ thống sục khí oxy.'
+    END AS [HuongDanBaoTri]
+FROM [beNuoi] B;
+```
+
+### So sánh tốc độ và Hiệu năng
+Để so sánh chính xác, bạn hãy bật tính năng đo thời gian và tài nguyên của SQL Server bằng cách chạy lệnh này trước khi thực thi code:
+```sql
+SET STATISTICS TIME ON; -- Đo thời gian CPU và thời gian thực thi
+SET STATISTICS IO ON;   -- Đo số lần đọc/ghi dữ liệu trên ổ đĩa
+```
+<img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/5f75a0ba-f0df-4ef5-a8a4-64555469974e" />
+
+<img width="2879" height="1789" alt="image" src="https://github.com/user-attachments/assets/6d98a20f-b43e-45c3-90a0-15d251339861" />
+
+#### Bảng so sánh chi tiết:
+| Tiêu chí | Sử dụng Cursor | Sử dụng Set-based (SELECT) |
+| :--- | :--- | :--- |
+| **Cơ chế** | **Duyệt từng dòng** (Row-by-row). | **Xử lý cả tập hợp/bảng** cùng lúc. |
+| **Thời gian CPU** | **Cao** (do lặp lại việc cấp phát bộ nhớ cho biến). | **Rất thấp** (được tối ưu hóa bởi Query Optimizer). |
+| **Số lần đọc dữ liệu** | **Nhiều** (mỗi dòng dữ liệu là một lần Fetch). | **Ít** (truy cập bảng theo chỉ mục tối ưu). |
+| **Độ phức tạp mã** | **Dài dòng**, cấu trúc phức tạp, khó bảo trì. | **Ngắn gọn**, tường minh, dễ đọc. |
+| **Hiệu năng** | **Chậm**, thường gây nghẽn hệ thống khi dữ liệu lớn. | **Nhanh**, là cách tiếp cận chuẩn trong SQL Server. |
+
