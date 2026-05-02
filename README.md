@@ -43,7 +43,7 @@ Mỗi phân đoạn mã SQL đều được minh chứng bằng các screenshot 
 ## Phần 1: Thiết kế và khởi tạo cấu trúc dữ liệu 
 ### 1.1 Khởi tạo Database 
 Bước đầu tiên, chúng ta khai báo lệnh `CREATE DATABASE` để thiết lập một cơ sở dữ liệu riêng biệt trên máy chủ. Việc kết hợp thêm lệnh `USE` ngay sau đó giúp trình biên dịch tập trung thực thi vào đúng mục tiêu, đảm bảo các cấu trúc bảng sau này không bị ghi đè lên hệ thống mặc định.
-``` SQL ```
+``` SQL 
 CREATE DATABASE [QuanLyThuyCung_K235480106080];
 GO
 USE [QuanLyThuyCung_K235480106080];
@@ -51,3 +51,5 @@ GO
 ```
 
 <img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/c64f3e10-ae04-4b35-9983-a58bb0b353b9" />
+                                            
+                                              _Bảng tạo cơ sở dữ liệu_
