@@ -158,3 +158,217 @@ FROM [sinhVat];
 ```
 
 <img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/0030bb1e-230a-425f-8192-3c41964cbd29" />
+
+### 2.4. Xây dựng Inline Table-Valued Function
+- Logic nghiệp vụ: Trong thủy cung, việc kiểm tra xem bể nào đang nuôi loài sinh vật nào và tình trạng ra sao là công việc thường nhật. Thay vì viết lệnh `JOIN` nhiều lần, ta sẽ tạo một hàm cho phép lọc nhanh các sinh vật theo Loại môi trường (ví dụ: Nước mặn, Nước ngọt).
+
+- Yêu cầu của hàm: Nhận vào tham số là `@loaiMT` `NVARCHAR`, trả về một bảng gồm danh sách các sinh vật, tên loài và tên bể tương ứng thuộc môi trường đó.
+
+### Script khởi tạo hàm:
+```sql
+-- Tạo hàm lấy danh sách sinh vật theo loại môi trường nước
+CREATE FUNCTION fn_DanhSachSinhVatTheoMoiTruong (@loaiMT NVARCHAR(50))
+RETURNS TABLE
+AS
+RETURN 
+(
+    -- Câu lệnh SELECT duy nhất trả về kết quả dưới dạng bảng
+    SELECT 
+        S.[maSinhVat], 
+        S.[tenLoai], 
+        B.[tenBe], 
+        B.[loaiMoiTruong],
+        S.[tinhTrangSucKhoe]
+    FROM [sinhVat] S
+    INNER JOIN [beNuoi] B ON S.[maBe] = B.[maBe]
+    WHERE B.[loaiMoiTruong] = @loaiMT
+);
+GO
+```
+
+### Câu lệnh SQL khai thác hàm:
+Vì kết quả trả về là một bảng, nên em sẽ sử dụng hàm này ở vị trí của một bảng sau từ khóa `FROM`.
+```sql
+-- Khai thác hàm để xem tất cả sinh vật sống trong môi trường 'Nước mặn'
+SELECT * FROM dbo.fn_DanhSachSinhVatTheoMoiTruong(N'Nước mặn');
+
+-- Bạn cũng có thể lọc thêm từ kết quả của hàm
+SELECT [tenLoai], [tenBe] 
+FROM dbo.fn_DanhSachSinhVatTheoMoiTruong(N'Nước ngọt')
+WHERE [tinhTrangSucKhoe] = N'Khỏe mạnh';
+```
+
+<img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/5e7802d1-85d8-4090-aa7b-27e838d118c3" />
+
+
+### 2.5. Viết 01 Multi-statement Table-Valued Function
+
+Để hoàn tất phần Function với loại phức tạp nhất là Multi-statement Table-Valued Function (mTVF), em sẽ xây dựng một hàm giúp quản lý đưa ra quyết định dựa trên tình trạng sức khỏe và chi phí.
+
+Hàm này khác biệt ở chỗ nó có một cấu trúc bảng tạm được định nghĩa trước bằng `DECLARE @... TABLE`, cho phép em thực hiện nhiều câu lệnh bên trong thân hàm.
+
+
+Yêu cầu của hàm: Thống kê danh sách sinh vật kèm theo cột "Phân loại mức độ chăm sóc".
+
+ - Nếu sinh vật có tình trạng 'Yếu', ghi chú là 'Cần chế độ đặc biệt'.
+
+ - Nếu chi phí cho ăn cao (> 400), ghi chú là 'Cần tối ưu chi phí'.
+
+ - Còn lại là 'Chăm sóc bình thường'.
+
+### Script khởi tạo hàm:
+```sql
+-- Tạo hàm đa câu lệnh để phân loại mức độ ưu tiên chăm sóc
+CREATE FUNCTION fn_PhanLoaiUuTienChamSoc()
+RETURNS @BangKetQua TABLE (
+    [MaSV] INT,
+    [TenLoai] NVARCHAR(200),
+    [TinhTrang] NVARCHAR(100),
+    [MucDoUuTien] NVARCHAR(100)
+)
+AS
+BEGIN
+    -- Bước 1: Đổ dữ liệu cơ bản vào bảng tạm @BangKetQua
+    INSERT INTO @BangKetQua ([MaSV], [TenLoai], [TinhTrang], [MucDoUuTien])
+    SELECT 
+        s.[maSinhVat], 
+        s.[tenLoai], 
+        s.[tinhTrangSucKhoe],
+        N'Chưa xác định' -- Giá trị tạm thời
+    FROM [sinhVat] s;
+
+    -- Bước 2: Cập nhật logic phân loại phức tạp dựa trên tình trạng sức khỏe
+    UPDATE @BangKetQua
+    SET [MucDoUuTien] = N'Cần chế độ đặc biệt'
+    WHERE [TinhTrang] = N'Yếu' OR [TinhTrang] = N'Đang theo dõi';
+
+    -- Bước 3: Cập nhật logic dựa trên chi phí (sử dụng Scalar Function đã viết ở phần trước)
+    UPDATE @BangKetQua
+    SET [MucDoUuTien] = N'Cần tối ưu chi phí'
+    WHERE dbo.fn_TinhTongChiPhiSinhVat([MaSV]) > 400 
+      AND [MucDoUuTien] = N'Chưa xác định';
+
+    -- Bước 4: Những trường hợp còn lại
+    UPDATE @BangKetQua
+    SET [MucDoUuTien] = N'Chăm sóc bình thường'
+    WHERE [MucDoUuTien] = N'Chưa xác định';
+
+    RETURN;
+END;
+GO
+```
+
+### Câu lệnh SQL khai thác hàm:
+```sql
+-- Xem báo cáo phân loại ưu tiên từ hàm
+SELECT * FROM dbo.fn_PhanLoaiUuTienChamSoc();
+```
+<img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/5fae40d6-316c-49dc-aea2-9b66a548026f" />
+
+### em sẽ giải thích ngắn gọn về đoạn code chạy trên:
+- Sử dụng biến bảng `@BangKetQua`: Khác với hàm Inline (chỉ có 1 lệnh `RETURN`), hàm này định nghĩa rõ cấu trúc bảng trả về ngay tại phần khai báo. điều này cho phép ta thực hiện nhiều bước xử lý (`INSERT`, `UPDATE`) bên trong.
+
+- Logic xử lý: Hàm thực hiện phân loại qua nhiều giai đoạn. Đặc biệt, nó có khả năng gọi lại hàm Scalar `fn_TinhTongChiPhiSinhVat` đã tạo trước đó để kiểm tra điều kiện về chi phí, thể hiện sự kết nối logic giữa các thành phần trong `Database`.
+
+- Ứng dụng: Đây là công cụ hỗ trợ ra quyết định cho ban quản lý thủy cung, giúp lọc ra những cá thể cần chú ý ngay lập tức mà không cần truy vấn thủ công từng điều kiện.
+
+## Phần 3: Xây dựng Store Procedure
+Khác với Function (Hàm) dùng để tính toán và trả về giá trị, Stored Procedure (SP) mạnh mẽ hơn vì nó có thể thực hiện các tác vụ quản trị, thay đổi cấu trúc hệ thống và xử lý logic phức tạp.
+
+### 3.1. Tìm hiểu về System Stored Procedures
+Trong SQL Server, các System SP thường bắt đầu bằng tiền tố sp_. Chúng được lưu trữ trong database hệ thống (master) nhưng bạn có thể gọi chúng ở bất kỳ database nào để thực hiện các nhiệm vụ kiểm tra và quản trị.
+
+Sau đây là 3 System SP mà em tìm hiểu được:
+
+- ### 1. sp_help
+Mục đích: Đây là lệnh "cứu cánh" khi  quên mất cấu trúc bảng. Nó hiển thị chi tiết các cột, kiểu dữ liệu, khóa chính, khóa ngoại của một đối tượng.
+
+Cách dùng: `EXEC sp_help 'Tên_Bảng';`
+
+- ### 2. sp_helptext
+Mục đích: Dùng để xem lại "ruột" (mã nguồn) của một Function, View hoặc Stored Procedure mà bạn đã viết trước đó. Rất hữu ích khi bạn muốn copy code từ cái cũ sang cái mới.
+
+Cách dùng: `EXEC sp_helptext 'Tên_Function_Hoặc_SP';`
+
+- ### 3. sp_rename
+Mục đích: Dùng để đổi tên một đối tượng (bảng, cột) mà không cần phải xóa đi tạo lại. Tuy nhiên, SQL Server sẽ cảnh báo bạn vì việc này có thể làm hỏng các script liên quan.
+
+Cách dùng: `EXEC sp_rename 'TenCu', 'TenMoi';`
+
+### Truy vấn SQL khai thác các System SP trên:
+Em sẽ chạy thử các lệnh này trong `database QuanLyThuyCung` của mình để thấy được kết quả 
+```sql
+-- 1. Xem chi tiết cấu trúc bảng sinhVat (Cực kỳ hay dùng)
+-- Kết quả sẽ hiện ra: Cột nào là khóa chính, khóa ngoại, kiểu dữ liệu là gì...
+EXEC sp_help 'sinhVat';
+
+-- 2. Xem lại đoạn code mình đã viết cho hàm fn_TinhTongChiPhiSinhVat
+-- Rất hữu ích khi cần kiểm tra lại logic đã viết
+EXEC sp_helptext 'fn_TinhTongChiPhiSinhVat';
+
+-- 3. Kiểm tra danh sách các database đang có trên Server
+-- Giúp bạn biết hệ thống đang quản lý những vùng lưu trữ nào
+EXEC sp_databases;
+```
+### Ảnh chạy đoạn code trên 
+<img width="2878" height="1799" alt="image" src="https://github.com/user-attachments/assets/7bc31e36-416c-4e09-ae46-be3b48bede2d" />
+<img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/fc426f22-d7cc-42d2-9d04-763e03153bdc" />
+<img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/036b03ab-6f11-40b4-9d03-5cc8373da53a" />
+
+### 3.2. Viết Stored Procedure thực hiện INSERT dữ liệu có kiểm tra logic
+Logic nghiệp vụ: Khi thêm một lịch cho ăn mới (`lichChoAn`), chúng ta cần đảm bảo tính hợp lệ của dữ liệu:
+
+- Sinh vật đó phải tồn tại trong hệ thống.
+
+- Lượng thức ăn không được vượt quá mức cho phép (ví dụ: tối đa 50kg/lần) để tránh lãng phí hoặc sai sót nhập liệu.
+
+Yêu cầu của SP: Nhận vào các thông số lịch ăn. Nếu thỏa mãn điều kiện thì thực hiện INSERT, nếu không thì báo lỗi và hủy thao tác.
+
+### Script khởi tạo Stored Procedure:
+```sql
+CREATE PROCEDURE sp_ThemLichChoAn
+    @maSV INT,
+    @thoiGian DATETIME,
+    @luongAn FLOAT,
+    @chiPhi MONEY
+AS
+BEGIN
+    -- 1. Kiểm tra sinh vật có tồn tại không
+    IF NOT EXISTS (SELECT 1 FROM [sinhVat] WHERE [maSinhVat] = @maSV)
+    BEGIN
+        PRINT N'Lỗi: Mã sinh vật không tồn tại trong hệ thống!';
+        RETURN;
+    END
+
+    -- 2. Kiểm tra logic lượng thức ăn (Giả sử tối đa là 50kg)
+    IF @luongAn > 50
+    BEGIN
+        PRINT N'Lỗi: Lượng thức ăn quá lớn (vượt ngưỡng 50kg), vui lòng kiểm tra lại!';
+        RETURN;
+    END
+
+    -- 3. Thực hiện chèn dữ liệu nếu mọi điều kiện hợp lệ
+    INSERT INTO [lichChoAn] ([maSinhVat], [thoiGianChoAn], [luongThucAnKg], [chiPhiBuaAn])
+    VALUES (@maSV, @thoiGian, @luongAn, @chiPhi);
+
+    PRINT N'Thêm lịch cho ăn thành công!';
+END;
+GO
+```
+### Câu lệnh SQL khai thác (Thực thi) Stored Procedure:
+Chúng ta sẽ thử 2 trường hợp: một trường hợp lỗi và một trường hợp thành công để kiểm chứng logic.
+```sql
+-- Trường hợp 1: Thử thêm cho một sinh vật không tồn tại (Mã 999)
+EXEC sp_ThemLichChoAn 999, '2026-05-02 10:00:00', 5.0, 100;
+
+-- Trường hợp 2: Thử nhập lượng thức ăn quá lớn (60kg)
+EXEC sp_ThemLichChoAn 1, '2026-05-02 10:00:00', 60.0, 500;
+
+-- Trường hợp 3: Thêm dữ liệu hợp lệ
+EXEC sp_ThemLichChoAn 1, '2026-05-02 11:30:00', 10.5, 200;
+
+-- Kiểm tra lại bảng dữ liệu
+SELECT * FROM [lichChoAn];
+```
+<img width="2879" height="1799" alt="image" src="https://github.com/user-attachments/assets/66a639fd-a965-432a-9fb8-02901ec759be" />
+
